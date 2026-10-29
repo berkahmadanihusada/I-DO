@@ -1,0 +1,206 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stok & Kas Gudang</title><link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg">
+<meta name="theme-color" content="#0f766e">
+<style>
+:root{--bg:#f4f6f6;--card:#fff;--tx:#17201f;--mut:#667;--pri:#0f766e;--line:#dde4e3;--bad:#b42318;--ok:#067647}
+@media(prefers-color-scheme:dark){:root{--bg:#101615;--card:#18211f;--tx:#e8eeed;--mut:#9aa8a6;--line:#2a3735;--pri:#2dd4bf;--bad:#f97066;--ok:#47cd89}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif;padding-bottom:70px}
+header{position:sticky;top:0;background:var(--pri);color:#fff;padding:10px 14px;display:flex;gap:8px;align-items:center;z-index:5}
+@media(prefers-color-scheme:dark){header{color:#06201c}}
+header b{flex:1}header input{border:0;border-radius:6px;padding:5px}
+#st{font-size:12px;opacity:.9}
+main{max-width:900px;margin:auto;padding:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.k small{color:var(--mut);display:block}.k b{font-size:18px}
+.row{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);align-items:center}
+.row:last-child{border:0}.row small{color:var(--mut);display:block}
+.bad{color:var(--bad)}.ok{color:var(--ok)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--tx);border-radius:8px;padding:6px 10px;cursor:pointer}
+button.p{background:var(--pri);color:#fff;border-color:var(--pri)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line)}
+nav button{flex:1;border:0;border-radius:0;padding:14px 4px}nav button.on{color:var(--pri);font-weight:700}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--tx);width:min(420px,92vw)}
+label{display:block;margin:8px 0 2px;color:var(--mut);font-size:13px}
+input,select,textarea{width:100%;font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--tx)}
+@media(max-width:480px){header b{display:none}}
+.cv{position:relative;height:230px}
+</style></head><body>
+<header><b>📦 Stok & Kas Gudang</b><span id="st"></span><input type="month" id="mo"><button id="xl">⬇ Excel</button><button id="lo" hidden>Keluar</button></header>
+<main id="m"></main>
+<nav><button data-t="ring">Ringkasan</button><button data-t="items">Barang</button><button data-t="tx">Transaksi</button><button data-t="exp">Kas Kantor</button></nav>
+<dialog id="dg"><form method="dialog" id="fm"></form></dialog>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+/* ====== ISI DUA BARIS INI (Supabase > Project Settings > API) ====== */
+const SUPA_URL='ISI_URL_PROJECT', SUPA_KEY='ISI_ANON_PUBLIC_KEY';
+/* =================================================================== */
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rp=n=>'Rp'+Math.round(n||0).toLocaleString('id-ID'), today=()=>new Date().toISOString().slice(0,10);
+const TB={items:'barang',tx:'transaksi',exp:'pengeluaran'};
+let S=JSON.parse(localStorage.getItem('S')||'null')||{items:{},tx:{},exp:{},last:{}};
+const save=()=>localStorage.setItem('S',JSON.stringify(S));
+let sb=null,tab='ring',month=today().slice(0,7),syncing=false,charts={};
+const live=t=>Object.values(S[t]).filter(r=>!r.deleted);
+const inM=r=>(r.tanggal||'').startsWith(month);
+const nm=id=>S.items[id]?.nama||'(barang dihapus)';
+const isIn=x=>x.jenis==='masuk';
+const saldoSampai=cut=>live('exp').filter(x=>x.tanggal<cut).reduce((a,x)=>a+(isIn(x)?1:-1)*x.jumlah,0);
+const stok=id=>live('tx').filter(x=>x.barang_id===id).reduce((a,x)=>a+(x.jenis==='beli'?1:-1)*Number(x.qty),0);
+
+function put(t,r){r.id=r.id||crypto.randomUUID();S[t][r.id]={deleted:false,...S[t][r.id],...r,_d:1};save();render();sync()}
+const del=(t,id)=>confirm('Hapus data ini?')&&put(t,{id,deleted:true});
+
+/* ---------- sinkronisasi ---------- */
+const setSt=s=>$('#st').textContent=s;
+async function sync(){
+  if(!sb||!navigator.onLine||syncing)return;
+  const {data:{session}}=await sb.auth.getSession(); if(!session){setSt('belum masuk');return}
+  syncing=true;setSt('⟳ sinkron…');
+  try{
+    for(const t in TB){
+      const o=Object.values(S[t]).filter(r=>r._d);
+      if(o.length){const {error}=await sb.from(TB[t]).upsert(o.map(({_d,updated_at,...r})=>r));if(error)throw error;
+        o.forEach(r=>{if(S[t][r.id]===r)delete r._d})}
+    }
+    for(const t in TB){let n;do{
+      let q=sb.from(TB[t]).select('*').order('updated_at').limit(1000);if(S.last[t])q=q.gt('updated_at',S.last[t]);
+      const {data,error}=await q;if(error)throw error;n=data.length;
+      data.forEach(r=>{if(!S[t][r.id]?._d)S[t][r.id]=r;S.last[t]=r.updated_at});
+    }while(n===1000)}
+    save();setSt('✓ tersinkron');render();
+  }catch(e){setSt('⚠ gagal sinkron');console.error(e)}
+  syncing=false;
+}
+
+/* ---------- form ---------- */
+function form(title,fields,v,cb){
+  $('#fm').innerHTML=`<h3>${title}</h3>`+fields.map(([n,l,ty,o])=>`<label>${l}</label>`+
+   (ty==='sel'?`<select name="${n}">${o.map(([k,t])=>`<option value="${k}" ${k==v[n]?'selected':''}>${esc(t)}</option>`).join('')}</select>`
+   :`<input name="${n}" type="${ty}" ${ty==='number'?'step="any" min="0"':''} value="${esc(v[n]??'')}" ${n==="catatan"?"":"required"}>`)).join('')+
+   `<div class="row"><button value="x" formnovalidate>Batal</button><button class="p" value="ok">Simpan</button></div>`;
+  const d=$('#dg');d.showModal();
+  $('#fm').onsubmit=e=>{if(e.submitter.value!=='ok')return;const f=Object.fromEntries(new FormData($('#fm')));cb(f)};
+}
+const fItem=id=>form(id?'Ubah barang':'Barang baru',[['kode','Kode','text'],['nama','Nama barang','text'],['satuan','Satuan','text'],['stok_min','Stok minimum (peringatan)','number']],
+  S.items[id]||{satuan:'pcs',stok_min:0},f=>put('items',{...f,id,stok_min:+f.stok_min}));
+const fTx=(id,jenis)=>{const its=live('items');if(!its.length)return alert('Tambah barang dulu.');
+  form(id?'Ubah transaksi':'Transaksi baru',[['jenis','Jenis','sel',[['jual','Penjualan (stok keluar)'],['beli','Pembelian (stok masuk)']]],
+   ['barang_id','Barang','sel',its.map(i=>[i.id,`${i.kode||''} ${i.nama}`])],['qty','Jumlah','number'],['harga','Harga satuan (Rp)','number'],['tanggal','Tanggal','date'],['catatan','Catatan','text']].map(f=>f[0]==='catatan'?f:f),
+   S.tx[id]||{jenis:jenis||'jual',tanggal:today(),harga:0,catatan:''},f=>put('tx',{...f,id,qty:+f.qty,harga:+f.harga,catatan:f.catatan.trim()}))};
+const fExp=(id,jenis)=>{const j=S.exp[id]?.jenis||jenis||'keluar',m=j==='masuk';
+  form(id?(m?'Ubah dana masuk':'Ubah pengeluaran'):(m?'Dana operasional masuk':'Pengeluaran operasional'),
+   [['tanggal','Tanggal','date'],['kategori',m?'Sumber dana (mis. Kas pusat, Dana bulanan)':'Kategori (mis. ATK, Listrik, Alat)','text'],['keterangan','Keterangan','text'],['jumlah','Jumlah (Rp)','number']],
+   S.exp[id]||{tanggal:today()},f=>put('exp',{...f,id,jenis:j,jumlah:+f.jumlah}))};
+
+/* ---------- tampilan ---------- */
+function chart(id,cfg){if(!window.Chart)return;charts[id]?.destroy();charts[id]=new Chart($('#'+id),{...cfg,options:{maintainAspectRatio:false,...cfg.options}})}
+function render(){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+  const tx=live('tx').filter(inM),ex=live('exp').filter(inM),m=$('#m');
+  const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0),ops=ex.filter(x=>!isIn(x)).reduce((a,x)=>a+x.jumlah,0),inc=ex.filter(isIn).reduce((a,x)=>a+x.jumlah,0),sOpen=saldoSampai(month+'-01'),sEnd=saldoSampai(month+'-32');
+  if(tab==='ring'){
+    const low=live('items').filter(i=>stok(i.id)<=i.stok_min);
+    const sold={};tx.filter(x=>x.jenis==='jual').forEach(x=>sold[x.barang_id]=(sold[x.barang_id]||0)+x.qty);
+    const top=Object.entries(sold).sort((a,b)=>b[1]-a[1]).slice(0,5);
+    m.innerHTML=`<button class="p" onclick="exportXlsx()">⬇ Unduh laporan bulan ini (Excel)</button>${+today().slice(8)>=26&&month===today().slice(0,7)?'<p>📅 Sudah akhir bulan — jangan lupa unduh laporan.</p>':''}<h3 style="margin:12px 0 8px">📦 Dana stok gudang</h3><div class="g">${[['Penjualan',jual],['Pembelian stok',beli],['Selisih stok (jual − beli)',jual-beli]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${l.startsWith('Selisih')?(v<0?'bad':'ok'):''}">${rp(v)}</b></div>`).join('')}</div>
+    <div class="card"><b>Penjualan vs pembelian per hari</b><div class="cv"><canvas id="c1"></canvas></div></div>
+    <div class="card"><b>Barang paling laku bulan ini</b><div class="cv"><canvas id="c2"></canvas></div></div>
+    <div class="card"><b>⚠ Stok menipis / habis</b>${low.map(i=>`<div class="row"><span>${esc(i.nama)}</span><span class="bad">${stok(i.id)} ${esc(i.satuan)} (min ${i.stok_min})</span></div>`).join('')||'<p>Semua stok aman.</p>'}</div>
+    <h3 style="margin:16px 0 8px">🏢 Dana operasional kantor (terpisah dari stok)</h3>
+    <div class="g">${[['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran',ops],['Sisa dana',sEnd]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${l==='Sisa dana'?(v<0?'bad':'ok'):''}">${rp(v)}</b></div>`).join('')}</div>
+    <div class="card"><b>Pengeluaran per kategori</b><div class="cv"><canvas id="c3"></canvas></div></div>`;
+    const days=[...new Set(tx.map(x=>x.tanggal))].sort(),sum=j=>days.map(d=>tx.filter(x=>x.tanggal===d&&x.jenis===j).reduce((a,x)=>a+x.qty*x.harga,0));
+    chart('c1',{type:'bar',data:{labels:days.map(d=>d.slice(8)),datasets:[{label:'Jual',data:sum('jual'),backgroundColor:'#0f766e'},{label:'Beli',data:sum('beli'),backgroundColor:'#f59e0b'}]}});
+    chart('c2',{type:'bar',data:{labels:top.map(t=>nm(t[0])),datasets:[{label:'Jumlah terjual',data:top.map(t=>t[1]),backgroundColor:'#0f766e'}]},options:{indexAxis:'y'}});
+    const cat={};ex.filter(x=>!isIn(x)).forEach(x=>cat[x.kategori]=(cat[x.kategori]||0)+x.jumlah);
+    chart('c3',{type:'doughnut',data:{labels:Object.keys(cat),datasets:[{data:Object.values(cat)}]}});
+  }else if(tab==='items'){
+    m.innerHTML=`<button class="p" onclick="fItem()">+ Barang</button><div class="card" style="margin-top:10px">${live('items').sort((a,b)=>a.nama.localeCompare(b.nama)).map(i=>`<div class="row"><div>${esc(i.nama)}<small>${esc(i.kode)}</small></div><div><b class="${stok(i.id)<=i.stok_min?'bad':''}">${stok(i.id)} ${esc(i.satuan)}</b> <button onclick="fItem('${i.id}')">✎</button><button onclick="del('items','${i.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada barang.</p>'}</div>`;
+  }else if(tab==='tx'){
+    m.innerHTML=`<button class="p" onclick="fTx(null,'jual')">+ Penjualan</button> <button class="p" onclick="fTx(null,'beli')">+ Pembelian</button><div class="card" style="margin-top:10px">${tx.sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).map(x=>`<div class="row"><div>${esc(nm(x.barang_id))}<small>${x.tanggal} · ${x.jenis==='jual'?'Jual':'Beli'} ${x.qty} × ${rp(x.harga)} ${esc(x.catatan)}</small></div><div><b class="${x.jenis==='jual'?'ok':'bad'}">${rp(x.qty*x.harga)}</b> <button onclick="fTx('${x.id}')">✎</button><button onclick="del('tx','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada transaksi bulan ini.</p>'}</div>`;
+  }else{
+    const all=[...ex].sort((x,y)=>y.tanggal.localeCompare(x.tanggal));
+    m.innerHTML=`<button class="p" onclick="fExp(null,'masuk')">+ Dana masuk</button> <button class="p" onclick="fExp(null,'keluar')">+ Pengeluaran</button>
+    <div class="g" style="margin-top:10px">${[['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran',ops],['Sisa dana',sEnd]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${l==='Sisa dana'?(v<0?'bad':'ok'):''}">${rp(v)}</b></div>`).join('')}</div>
+    <div class="card">${all.map(x=>`<div class="row"><div>${esc(x.keterangan)}<small>${x.tanggal} · ${esc(x.kategori)}${isIn(x)?' · masuk':''}</small></div><div><b class="${isIn(x)?'ok':'bad'}">${isIn(x)?'+':'−'}${rp(x.jumlah)}</b> <button onclick="fExp('${x.id}')">✎</button><button onclick="del('exp','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada catatan bulan ini.</p>'}</div>`;
+  }
+}
+
+/* ---------- export Excel ---------- */
+/*XLSX-START*/
+const BLN=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+function buildWb(){
+  const wb=new ExcelJS.Workbook();wb.creator='Stok & Kas Gudang';
+  const [y,mm]=month.split('-'),judul=BLN[+mm-1]+' '+y,c0=month+'-01',c1=month+'-32';
+  const HF={type:'pattern',pattern:'solid',fgColor:{argb:'FF0F766E'}},SF={type:'pattern',pattern:'solid',fgColor:{argb:'FFE6F4F1'}},ZF={type:'pattern',pattern:'solid',fgColor:{argb:'FFF6F8F8'}};
+  const th={style:'thin',color:{argb:'FFBFC9C7'}},bd={top:th,left:th,bottom:th,right:th},RP='"Rp"#,##0',TG='dd/mm/yyyy';
+  const L=i=>String.fromCharCode(65+i), D=t=>new Date(t+'T00:00:00Z');
+  function sheet(name,title,heads,rows,o={}){
+    const ws=wb.addWorksheet(name,{views:[{state:'frozen',ySplit:4,showGridLines:false}]});
+    ws.mergeCells(1,1,1,heads.length);const t=ws.getCell(1,1);t.value=title;t.font={bold:true,size:14,color:{argb:'FF0F766E'}};
+    ws.getCell(2,1).value='Periode: '+judul;ws.getCell(2,1).font={italic:true,color:{argb:'FF667085'}};
+    heads.forEach((h,i)=>{const c=ws.getRow(4).getCell(i+1);c.value=h[0];c.fill=HF;c.font={bold:true,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle'};c.border=bd;ws.getColumn(i+1).width=h[1]});
+    ws.getRow(4).height=22;
+    rows.forEach((r,ri)=>{const n=5+ri,row=ws.getRow(n),sec=typeof r[0]==='string'&&r[0][0]==='#';
+      r.forEach((v,i)=>{const c=row.getCell(i+1);c.value=typeof v==='function'?v(n):(sec&&i===0?v.slice(1):v);c.border=bd;
+        if(heads[i][2]&&!sec)c.numFmt=heads[i][2];
+        if(sec){c.fill=SF;c.font={bold:true}}else if(ri%2)c.fill=ZF;
+        if(o.boldLast&&ri===rows.length-1)c.font={bold:true}})});
+    const last=4+rows.length;
+    if(o.sum&&rows.length){const tr=ws.getRow(last+1);tr.getCell(1).value='TOTAL';
+      o.sum.forEach(i=>{tr.getCell(i+1).value={formula:`SUM(${L(i)}5:${L(i)}${last})`,result:rows.reduce((a,r)=>a+(+r[i]||0),0)}});
+      if(o.endBal!=null)tr.getCell(o.endCol+1).value={formula:`${L(o.endCol)}${last}`,result:o.endBal};
+      for(let i=0;i<heads.length;i++){const c=tr.getCell(i+1);c.font={bold:true};c.fill=SF;c.border=bd;if(heads[i][2]&&i>0)c.numFmt=heads[i][2]}}
+    if(rows.length&&!o.noFilter)ws.autoFilter={from:{row:4,column:1},to:{row:4,column:heads.length}};
+    return ws}
+  const tx=live('tx').filter(inM),ex=live('exp').filter(inM);
+  const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0);
+  const ops=ex.filter(x=>!isIn(x)).reduce((a,x)=>a+x.jumlah,0),inc=ex.filter(isIn).reduce((a,x)=>a+x.jumlah,0),sOpen=saldoSampai(c0),sEnd=saldoSampai(c1);
+  sheet('Ringkasan','Laporan Bulanan Gudang & Kas Kantor',[['Keterangan',38],['Nilai (Rp)',22,RP]],[
+    ['#DANA STOK GUDANG',''],['Total penjualan',jual],['Total pembelian stok',beli],['Selisih (jual − beli)',jual-beli],
+    ['#DANA OPERASIONAL KANTOR',''],['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran operasional',ops],['Sisa dana (saldo akhir)',sEnd]],{noFilter:1});
+  const jur=j=>tx.filter(x=>x.jenis===j).sort((a,b)=>a.tanggal.localeCompare(b.tanggal)).map(x=>[D(x.tanggal),S.items[x.barang_id]?.kode||'',nm(x.barang_id),x.qty,S.items[x.barang_id]?.satuan||'',x.harga,r=>({formula:`D${r}*F${r}`,result:x.qty*x.harga}),x.catatan||'']);
+  const jh=[['Tanggal',13,TG],['Kode',12],['Nama Barang',32],['Jumlah',10,'#,##0.##'],['Satuan',10],['Harga Satuan',16,RP],['Total',18,RP],['Catatan',30]];
+  [['Jurnal Penjualan','Jurnal Penjualan Barang','jual'],['Jurnal Pembelian','Jurnal Pembelian Stok','beli']].forEach(([n,t,j])=>{
+    const rows=jur(j);const ws=sheet(n,t,jh,rows);
+    if(rows.length){const tr=ws.getRow(5+rows.length);tr.getCell(7).value={formula:`SUM(G5:G${4+rows.length})`,result:j==='jual'?jual:beli};tr.getCell(1).value='TOTAL';
+      for(let i=1;i<=8;i++){const c=tr.getCell(i);c.font={bold:true};c.fill=SF;c.border=bd;if(i===7)c.numFmt=RP}}});
+  const bq=(id,f)=>live('tx').filter(x=>x.barang_id===id&&f(x)).reduce((a,x)=>a+(x.jenis==='beli'?1:-1)*x.qty,0);
+  sheet('Stok Barang','Posisi Stok Barang',[['Kode',12],['Nama Barang',32],['Satuan',10],['Stok Awal',12,'#,##0.##'],['Masuk',12,'#,##0.##'],['Keluar',12,'#,##0.##'],['Stok Akhir',12,'#,##0.##'],['Stok Min',10],['Status',12]],
+    live('items').sort((a,b)=>a.nama.localeCompare(b.nama)).map(i=>{
+      const aw=bq(i.id,x=>x.tanggal<c0),ma=bq(i.id,x=>x.tanggal.startsWith(month)&&x.jenis==='beli'),ke=-bq(i.id,x=>x.tanggal.startsWith(month)&&x.jenis==='jual'),ak=aw+ma-ke;
+      return [i.kode||'',i.nama,i.satuan,aw,ma,ke,r=>({formula:`D${r}+E${r}-F${r}`,result:ak}),i.stok_min,ak<=i.stok_min?'Menipis':'Aman']}));
+  let run=sOpen;const kr=[['','Saldo awal bulan','','','',sOpen]];
+  ex.sort((a,b)=>a.tanggal.localeCompare(b.tanggal)).forEach(x=>{const m=isIn(x);run+=m?x.jumlah:-x.jumlah;const bal=run;
+    kr.push([D(x.tanggal),x.keterangan,x.kategori,m?x.jumlah:'',m?'':x.jumlah,r=>({formula:`F${r-1}+D${r}-E${r}`,result:bal})])});
+  sheet('Kas Operasional','Kas Operasional Kantor',[['Tanggal',13,TG],['Keterangan',36],['Kategori / Sumber',22],['Dana Masuk',18,RP],['Pengeluaran',18,RP],['Saldo',18,RP]],kr,{sum:[3,4],endCol:5,endBal:sEnd});
+  return wb}
+async function exportXlsx(){
+  if(!window.ExcelJS)return alert('Pustaka Excel belum termuat. Buka aplikasi sekali saat online, lalu coba lagi.');
+  const buf=await buildWb().xlsx.writeBuffer(),a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+  a.download='Laporan-Gudang-'+month+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000)}
+/*XLSX-END*/
+
+/* ---------- mulai ---------- */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;render()});
+$('#xl').onclick=exportXlsx;$('#mo').value=month;$('#mo').onchange=e=>{month=e.target.value||month;render()};
+addEventListener('online',sync);document.addEventListener('visibilitychange',()=>!document.hidden&&sync());setInterval(sync,30000);
+addEventListener('offline',()=>setSt('offline — data tersimpan di perangkat'));
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
+async function boot(){
+  render();
+  if(!window.supabase||SUPA_URL.startsWith('ISI')){setSt('Supabase belum diisi');return}
+  sb=supabase.createClient(SUPA_URL,SUPA_KEY);
+  const {data:{session}}=await sb.auth.getSession();
+  $('#lo').hidden=!session;$('#lo').onclick=async()=>{await sb.auth.signOut();location.reload()};
+  if(!session&&navigator.onLine)form('Masuk',[['email','Email','email'],['password','Password','password']],{},async f=>{
+    const {error}=await sb.auth.signInWithPassword(f);if(error)alert('Gagal masuk: '+error.message);else location.reload()});
+  sync();
+}
+boot();
+</script></body></html>
