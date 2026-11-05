@@ -36,7 +36,7 @@ input,select,textarea{width:100%;font:inherit;padding:8px;border:1px solid var(-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 /* ====== ISI DUA BARIS INI (Supabase > Project Settings > API) ====== */
-const SUPA_URL='https://cexfxnrekkmvkofngrmr.supabase.co', SUPA_KEY='sb_publishable_7V7ha-5hxUkXK4zj_ijMuw_VL_yL83s';
+const SUPA_URL='ISI_URL_PROJECT', SUPA_KEY='ISI_ANON_PUBLIC_KEY';
 /* =================================================================== */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rp=n=>'Rp'+Math.round(n||0).toLocaleString('id-ID'), today=()=>new Date().toISOString().slice(0,10);
@@ -55,6 +55,12 @@ const expTag=e=>{const d=daysTo(e);return d<0?' ⚠ KEDALUWARSA':d<=90?` ⚠ ${d
 function batches(id,cut='9999'){const m={};live('tx').filter(x=>x.barang_id===id&&x.tanggal<cut).forEach(x=>{const k=x.batch||'-',b=m[k]=m[k]||{batch:k,qty:0,exp:null};
   b.qty+=(x.jenis==='beli'?1:-1)*x.qty;if(x.jenis==='beli'&&x.exp&&(!b.exp||x.exp<b.exp))b.exp=x.exp});return Object.values(m).filter(b=>b.qty!==0)}
 const expList=()=>live('items').flatMap(i=>batches(i.id).filter(b=>b.qty>0&&b.exp&&daysTo(b.exp)<=90).map(b=>({...b,nama:i.nama,satuan:i.satuan}))).sort((a,b)=>a.exp.localeCompare(b.exp));
+function cogsAll(){const st={},by={};
+  live('tx').slice().sort((a,b)=>a.tanggal.localeCompare(b.tanggal)||(a.jenis==='beli'?-1:1)-(b.jenis==='beli'?-1:1)).forEach(x=>{
+    const t=st[x.barang_id]=st[x.barang_id]||{qty:0,avg:0};
+    if(x.jenis==='beli'){const nq=t.qty+x.qty;t.avg=t.qty<=0?x.harga:(t.qty*t.avg+x.qty*x.harga)/nq;t.qty=nq}
+    else{by[x.id]={unit:t.avg,total:t.avg*x.qty,neg:t.qty<x.qty};t.qty-=x.qty}});
+  return {by,st}}
 /*HELP-END*/
 const stok=id=>live('tx').filter(x=>x.barang_id===id).reduce((a,x)=>a+(x.jenis==='beli'?1:-1)*Number(x.qty),0);
 
@@ -107,15 +113,18 @@ const fExp=(id,jenis)=>{const j=S.exp[id]?.jenis||jenis||'keluar',m=j==='masuk';
 function chart(id,cfg){if(!window.Chart)return;charts[id]?.destroy();charts[id]=new Chart($('#'+id),{...cfg,options:{maintainAspectRatio:false,...cfg.options}})}
 function render(){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
-  const tx=live('tx').filter(inM),ex=live('exp').filter(inM),m=$('#m');
+  const tx=live('tx').filter(inM),ex=live('exp').filter(inM),m=$('#m'),CG=cogsAll();
   const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0),ops=ex.filter(x=>!isIn(x)).reduce((a,x)=>a+x.jumlah,0),inc=ex.filter(isIn).reduce((a,x)=>a+x.jumlah,0),sOpen=saldoSampai(month+'-01'),sEnd=saldoSampai(month+'-32');
   if(tab==='ring'){
     const low=live('items').filter(i=>stok(i.id)<=i.stok_min);
+    const hpp=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+(CG.by[x.id]?.total||0),0),pi={};
+    tx.filter(x=>x.jenis==='jual').forEach(x=>{const p=pi[x.barang_id]=pi[x.barang_id]||{q:0,r:0,c:0};p.q+=x.qty;p.r+=x.qty*x.harga;p.c+=CG.by[x.id]?.total||0});
     const sold={};tx.filter(x=>x.jenis==='jual').forEach(x=>sold[x.barang_id]=(sold[x.barang_id]||0)+x.qty);
     const top=Object.entries(sold).sort((a,b)=>b[1]-a[1]).slice(0,5);
-    m.innerHTML=`<button class="p" onclick="exportXlsx()">⬇ Unduh laporan bulan ini (Excel)</button>${+today().slice(8)>=26&&month===today().slice(0,7)?'<p>📅 Sudah akhir bulan — jangan lupa unduh laporan.</p>':''}<h3 style="margin:12px 0 8px">📦 Dana stok gudang</h3><div class="g">${[['Penjualan',jual],['Pembelian stok',beli],['Selisih stok (jual − beli)',jual-beli]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${l.startsWith('Selisih')?(v<0?'bad':'ok'):''}">${rp(v)}</b></div>`).join('')}</div>
+    m.innerHTML=`<button class="p" onclick="exportXlsx()">⬇ Unduh laporan bulan ini (Excel)</button>${+today().slice(8)>=26&&month===today().slice(0,7)?'<p>📅 Sudah akhir bulan — jangan lupa unduh laporan.</p>':''}<h3 style="margin:12px 0 8px">📦 Dana stok gudang</h3><div class="g">${[['Penjualan',jual],['HPP (harga pokok penjualan)',hpp],['Laba kotor',jual-hpp],['Margin laba kotor',jual?(jual-hpp)/jual*100:0],['Pembelian stok',beli],['Selisih stok (jual − beli)',jual-beli]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${/^(Selisih|Laba)/.test(l)?(v<0?'bad':'ok'):''}">${l.startsWith('Margin')?v.toFixed(1)+'%':rp(v)}</b></div>`).join('')}</div>
     <div class="card"><b>Penjualan vs pembelian per hari</b><div class="cv"><canvas id="c1"></canvas></div></div>
     <div class="card"><b>Barang paling laku bulan ini</b><div class="cv"><canvas id="c2"></canvas></div></div>
+    <div class="card"><b>Laba kotor per barang (bulan ini)</b>${Object.entries(pi).map(([id,p])=>`<div class="row"><span>${esc(nm(id))}<small>terjual ${p.q} · penjualan ${rp(p.r)}</small></span><span class="${p.r-p.c<0?'bad':'ok'}">${rp(p.r-p.c)}<small>HPP ${rp(p.c)}</small></span></div>`).join('')||'<p>Belum ada penjualan bulan ini.</p>'}</div>
     <div class="card"><b>⚠ Stok menipis / habis</b>${low.map(i=>`<div class="row"><span>${esc(i.nama)}</span><span class="bad">${stok(i.id)} ${esc(i.satuan)} (min ${i.stok_min})</span></div>`).join('')||'<p>Semua stok aman.</p>'}</div>
     <div class="card"><b>⏰ Mendekati kedaluwarsa (≤ 90 hari)</b>${expList().map(e=>`<div class="row"><span>${esc(e.nama)}<small>batch ${esc(e.batch)}</small></span><span class="bad">${e.qty} ${esc(e.satuan)} · ${e.exp}${expTag(e.exp)}</span></div>`).join('')||'<p>Tidak ada.</p>'}</div>
     <h3 style="margin:16px 0 8px">🏢 Dana operasional kantor (terpisah dari stok)</h3>
@@ -127,9 +136,9 @@ function render(){
     const cat={};ex.filter(x=>!isIn(x)).forEach(x=>cat[x.kategori]=(cat[x.kategori]||0)+x.jumlah);
     chart('c3',{type:'doughnut',data:{labels:Object.keys(cat),datasets:[{data:Object.values(cat)}]}});
   }else if(tab==='items'){
-    m.innerHTML=`<button class="p" onclick="fItem()">+ Barang</button><div class="card" style="margin-top:10px">${live('items').sort((a,b)=>a.nama.localeCompare(b.nama)).map(i=>`<div class="row"><div>${esc(i.nama)}<small>${esc(i.kode)}</small>${batches(i.id).filter(b=>b.batch!=='-'||b.exp).map(b=>`<small>↳ ${b.batch==='-'?'tanpa batch':'batch '+esc(b.batch)} · ${b.qty} ${esc(i.satuan)}${b.exp?' · exp '+b.exp+expTag(b.exp):''}</small>`).join('')}</div><div><b class="${stok(i.id)<=i.stok_min?'bad':''}">${stok(i.id)} ${esc(i.satuan)}</b> <button onclick="fItem('${i.id}')">✎</button><button onclick="del('items','${i.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada barang.</p>'}</div>`;
+    m.innerHTML=`<button class="p" onclick="fItem()">+ Barang</button><div class="card" style="margin-top:10px">${live('items').sort((a,b)=>a.nama.localeCompare(b.nama)).map(i=>`<div class="row"><div>${esc(i.nama)}<small>${esc(i.kode)}</small>${CG.st[i.id]?`<small>HPP rata-rata ${rp(CG.st[i.id].avg)}/${esc(i.satuan)} · nilai stok ${rp(Math.max(0,CG.st[i.id].qty)*CG.st[i.id].avg)}</small>`:''}${batches(i.id).filter(b=>b.batch!=='-'||b.exp).map(b=>`<small>↳ ${b.batch==='-'?'tanpa batch':'batch '+esc(b.batch)} · ${b.qty} ${esc(i.satuan)}${b.exp?' · exp '+b.exp+expTag(b.exp):''}</small>`).join('')}</div><div><b class="${stok(i.id)<=i.stok_min?'bad':''}">${stok(i.id)} ${esc(i.satuan)}</b> <button onclick="fItem('${i.id}')">✎</button><button onclick="del('items','${i.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada barang.</p>'}</div>`;
   }else if(tab==='tx'){
-    m.innerHTML=`<button class="p" onclick="fTx(null,'jual')">+ Penjualan</button> <button class="p" onclick="fTx(null,'beli')">+ Pembelian</button><div class="card" style="margin-top:10px">${tx.sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).map(x=>`<div class="row"><div>${esc(nm(x.barang_id))}<small>${x.tanggal} · ${x.jenis==='jual'?'Jual':'Beli'} ${x.qty} × ${rp(x.harga)}${x.batch?' · batch '+esc(x.batch):''}${x.exp?' · exp '+x.exp:''} ${esc(x.catatan)}</small></div><div><b class="${x.jenis==='jual'?'ok':'bad'}">${rp(x.qty*x.harga)}</b> <button onclick="fTx('${x.id}')">✎</button><button onclick="del('tx','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada transaksi bulan ini.</p>'}</div>`;
+    m.innerHTML=`<button class="p" onclick="fTx(null,'jual')">+ Penjualan</button> <button class="p" onclick="fTx(null,'beli')">+ Pembelian</button><div class="card" style="margin-top:10px">${tx.sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).map(x=>`<div class="row"><div>${esc(nm(x.barang_id))}<small>${x.tanggal} · ${x.jenis==='jual'?'Jual':'Beli'} ${x.qty} × ${rp(x.harga)}${x.batch?' · batch '+esc(x.batch):''}${x.exp?' · exp '+x.exp:''} ${esc(x.catatan)}</small>${x.jenis==='jual'&&CG.by[x.id]?`<small>HPP ${rp(CG.by[x.id].unit)}/unit · laba ${rp(x.qty*x.harga-CG.by[x.id].total)}${CG.by[x.id].neg?' ⚠ stok tidak cukup':''}</small>`:''}</div><div><b class="${x.jenis==='jual'?'ok':'bad'}">${rp(x.qty*x.harga)}</b> <button onclick="fTx('${x.id}')">✎</button><button onclick="del('tx','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada transaksi bulan ini.</p>'}</div>`;
   }else{
     const all=[...ex].sort((x,y)=>y.tanggal.localeCompare(x.tanggal));
     m.innerHTML=`<button class="p" onclick="fExp(null,'masuk')">+ Dana masuk</button> <button class="p" onclick="fExp(null,'keluar')">+ Pengeluaran</button>
@@ -160,23 +169,31 @@ function buildWb(){
         if(o.boldLast&&ri===rows.length-1)c.font={bold:true}})});
     const last=4+rows.length;
     if(o.sum&&rows.length){const tr=ws.getRow(last+1);tr.getCell(1).value='TOTAL';
-      o.sum.forEach(i=>{tr.getCell(i+1).value={formula:`SUM(${L(i)}5:${L(i)}${last})`,result:rows.reduce((a,r)=>a+(+r[i]||0),0)}});
+      o.sum.forEach(i=>{tr.getCell(i+1).value={formula:`SUM(${L(i)}5:${L(i)}${last})`,result:rows.reduce((a,r)=>a+(typeof r[i]==='function'?(r[i](0).result||0):(+r[i]||0)),0)}});
       if(o.endBal!=null)tr.getCell(o.endCol+1).value={formula:`${L(o.endCol)}${last}`,result:o.endBal};
       for(let i=0;i<heads.length;i++){const c=tr.getCell(i+1);c.font={bold:true};c.fill=SF;c.border=bd;if(heads[i][2]&&i>0)c.numFmt=heads[i][2]}}
     if(rows.length&&!o.noFilter)ws.autoFilter={from:{row:4,column:1},to:{row:4,column:heads.length}};
     return ws}
   const tx=live('tx').filter(inM),ex=live('exp').filter(inM);
-  const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0);
+  const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0),CG=cogsAll(),hpp=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+(CG.by[x.id]?.total||0),0);
   const ops=ex.filter(x=>!isIn(x)).reduce((a,x)=>a+x.jumlah,0),inc=ex.filter(isIn).reduce((a,x)=>a+x.jumlah,0),sOpen=saldoSampai(c0),sEnd=saldoSampai(c1);
   sheet('Ringkasan','Laporan Bulanan Gudang & Kas Kantor',[['Keterangan',38],['Nilai (Rp)',22,RP]],[
-    ['#DANA STOK GUDANG',''],['Total penjualan',jual],['Total pembelian stok',beli],['Selisih (jual − beli)',jual-beli],
+    ['#DANA STOK GUDANG',''],['Total penjualan',jual],['HPP (harga pokok penjualan)',hpp],['Laba kotor (penjualan − HPP)',jual-hpp],['Margin laba kotor',jual?((jual-hpp)/jual*100).toFixed(1)+' %':'-'],['Total pembelian stok',beli],['Selisih (jual − beli)',jual-beli],
     ['#DANA OPERASIONAL KANTOR',''],['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran operasional',ops],['Sisa dana (saldo akhir)',sEnd]],{noFilter:1});
-  const jur=j=>tx.filter(x=>x.jenis===j).sort((a,b)=>a.tanggal.localeCompare(b.tanggal)).map(x=>[D(x.tanggal),S.items[x.barang_id]?.kode||'',nm(x.barang_id),x.batch||'',x.exp?D(x.exp):'',x.qty,S.items[x.barang_id]?.satuan||'',x.harga,r=>({formula:`F${r}*H${r}`,result:x.qty*x.harga}),x.catatan||'']);
+  const jx=j=>tx.filter(x=>x.jenis===j).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+  const jur=j=>jx(j).map(x=>[D(x.tanggal),S.items[x.barang_id]?.kode||'',nm(x.barang_id),x.batch||'',x.exp?D(x.exp):'',x.qty,S.items[x.barang_id]?.satuan||'',x.harga,r=>({formula:`F${r}*H${r}`,result:x.qty*x.harga}),x.catatan||'']);
   const jh=[['Tanggal',13,TG],['Kode',12],['Nama Barang',32],['Batch',16],['Exp',13,TG],['Jumlah',10,'#,##0.##'],['Satuan',10],['Harga Satuan',16,RP],['Total',18,RP],['Catatan',30]];
   [['Jurnal Penjualan','Jurnal Penjualan Barang','jual'],['Jurnal Pembelian','Jurnal Pembelian Stok','beli']].forEach(([n,t,j])=>{
-    const rows=jur(j);const ws=sheet(n,t,jh,rows);
-    if(rows.length){const tr=ws.getRow(5+rows.length);tr.getCell(9).value={formula:`SUM(I5:I${4+rows.length})`,result:j==='jual'?jual:beli};tr.getCell(1).value='TOTAL';
-      for(let i=1;i<=10;i++){const c=tr.getCell(i);c.font={bold:true};c.fill=SF;c.border=bd;if(i===9)c.numFmt=RP}}});
+    const jl=j==='jual';let rows=jur(j);
+    if(jl)rows=rows.map((r,k)=>{const x=jx(j)[k],c=CG.by[x.id]||{unit:0,total:0};return [...r.slice(0,9),c.unit,rr=>({formula:`F${rr}*J${rr}`,result:c.total}),rr=>({formula:`I${rr}-K${rr}`,result:x.qty*x.harga-c.total}),r[9]]});
+    const hd=jl?[...jh.slice(0,9),['HPP Satuan',16,RP],['Total HPP',18,RP],['Laba Kotor',18,RP],jh[9]]:jh;
+    const ws=sheet(n,t,hd,rows);
+    if(rows.length){const tr=ws.getRow(5+rows.length);tr.getCell(1).value='TOTAL';
+      (jl?[[9,jual],[11,hpp],[12,jual-hpp]]:[[9,beli]]).forEach(([ci,res])=>{const Lt=L(ci-1);tr.getCell(ci).value={formula:`SUM(${Lt}5:${Lt}${4+rows.length})`,result:res}});
+      for(let i=1;i<=hd.length;i++){const c=tr.getCell(i);c.font={bold:true};c.fill=SF;c.border=bd;if(i>=9&&i<=12&&(jl||i===9))c.numFmt=RP}}});
+  const pi={};tx.filter(x=>x.jenis==='jual').forEach(x=>{const p=pi[x.barang_id]=pi[x.barang_id]||{q:0,r:0,c:0};p.q+=x.qty;p.r+=x.qty*x.harga;p.c+=CG.by[x.id]?.total||0});
+  sheet('HPP & Laba','HPP & Laba Kotor per Barang',[['Kode',12],['Nama Barang',32],['Satuan',10],['Qty Terjual',12,'#,##0.##'],['Penjualan',18,RP],['HPP',18,RP],['Laba Kotor',18,RP],['Margin',10,'0.0%']],
+    Object.entries(pi).map(([id,p])=>[S.items[id]?.kode||'',nm(id),S.items[id]?.satuan||'',p.q,p.r,p.c,r=>({formula:`E${r}-F${r}`,result:p.r-p.c}),r=>({formula:`IF(E${r}=0,0,G${r}/E${r})`,result:p.r?(p.r-p.c)/p.r:0})]),{sum:[4,5,6]});
   const bq=(id,f)=>live('tx').filter(x=>x.barang_id===id&&f(x)).reduce((a,x)=>a+(x.jenis==='beli'?1:-1)*x.qty,0);
   sheet('Stok Barang','Posisi Stok Barang',[['Kode',12],['Nama Barang',32],['Satuan',10],['Stok Awal',12,'#,##0.##'],['Masuk',12,'#,##0.##'],['Keluar',12,'#,##0.##'],['Stok Akhir',12,'#,##0.##'],['Stok Min',10],['Status',12]],
     live('items').sort((a,b)=>a.nama.localeCompare(b.nama)).map(i=>{
