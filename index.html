@@ -40,8 +40,9 @@ const SUPA_URL='https://cexfxnrekkmvkofngrmr.supabase.co', SUPA_KEY='sb_publisha
 /* =================================================================== */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rp=n=>'Rp'+Math.round(n||0).toLocaleString('id-ID'), today=()=>new Date().toISOString().slice(0,10);
-const TB={items:'barang',tx:'transaksi',exp:'pengeluaran'};
+const TB={items:'barang',tx:'transaksi',exp:'pengeluaran',cat:'kategori'};
 let S=JSON.parse(localStorage.getItem('S')||'null')||{items:{},tx:{},exp:{},last:{}};
+S.cat=S.cat||{};
 const save=()=>localStorage.setItem('S',JSON.stringify(S));
 let sb=null,tab='ring',month=today().slice(0,7),syncing=false,charts={};
 const live=t=>Object.values(S[t]).filter(r=>!r.deleted);
@@ -72,21 +73,22 @@ const setSt=s=>$('#st').textContent=s;
 async function sync(){
   if(!sb||!navigator.onLine||syncing)return;
   const {data:{session}}=await sb.auth.getSession(); if(!session){setSt('belum masuk');return}
-  syncing=true;setSt('⟳ sinkron…');
+  syncing=true;let catOk=false,again=false;setSt('⟳ sinkron…');
   try{
     for(const t in TB){
       const o=Object.values(S[t]).filter(r=>r._d);
-      if(o.length){const {error}=await sb.from(TB[t]).upsert(o.map(({_d,updated_at,...r})=>r));if(error)throw error;
+      if(o.length){const {error}=await sb.from(TB[t]).upsert(o.map(({_d,updated_at,...r})=>r));if(error){if(t==='cat')continue;throw error}
         o.forEach(r=>{if(S[t][r.id]===r)delete r._d})}
     }
     for(const t in TB){let n;do{
       let q=sb.from(TB[t]).select('*').order('updated_at').limit(1000);if(S.last[t])q=q.gt('updated_at',S.last[t]);
-      const {data,error}=await q;if(error)throw error;n=data.length;
+      const {data,error}=await q;if(error){if(t==='cat')continue;throw error}n=data.length;if(t==='cat')catOk=true;
       data.forEach(r=>{if(!S[t][r.id]?._d)S[t][r.id]=r;S.last[t]=r.updated_at});
     }while(n===1000)}
+    if(catOk)['keluar','masuk'].forEach(j=>{if(seedJ(j))again=true});
     save();setSt('✓ tersinkron');render();
   }catch(e){setSt('⚠ gagal sinkron');console.error(e)}
-  syncing=false;
+  syncing=false;if(again)sync();
 }
 
 /* ---------- form ---------- */
@@ -105,12 +107,55 @@ const fTx=(id,jenis)=>{const its=live('items');if(!its.length)return alert('Tamb
    ['barang_id','Barang','sel',its.map(i=>[i.id,`${i.kode||''} ${i.nama}`])],['qty','Jumlah','number'],['harga','Harga satuan (Rp)','number'],['tanggal','Tanggal','date'],['batch','Nomor batch (opsional)','text',[...new Set(live('tx').map(x=>x.batch).filter(Boolean))]],['exp','Tanggal kedaluwarsa (diisi saat pembelian)','date'],['catatan','Catatan','text']],
    S.tx[id]||{jenis:jenis||'jual',tanggal:today(),harga:0,catatan:''},f=>put('tx',{...f,id,qty:+f.qty,harga:+f.harga,catatan:f.catatan.trim(),batch:f.batch.trim()||null,exp:f.exp||null}))};
 const KAT_K=['Kendaraan','ATK & Perlengkapan','Alat & Bahan','Pelatihan & Perizinan','Pelunasan Vendor','Lainnya'],KAT_M=['Dana operasional','Lainnya'];
-const katOpts=j=>{const base=j==='masuk'?KAT_M:KAT_K,used=[...new Set(live('exp').filter(x=>(x.jenis==='masuk')===(j==='masuk')).map(x=>x.kategori).filter(k=>k&&!base.includes(k)))].sort();
+const cid=(j,n)=>{let a=0x811c9dc5,b=0x1b873593;for(const ch of j+':'+n.toLowerCase()){a=Math.imul(a^ch.charCodeAt(0),16777619);b=Math.imul(b^ch.charCodeAt(0),2246822519)}
+  const x=v=>(v>>>0).toString(16).padStart(8,'0'),p=x(a^0x9e3779b9),q=x(b^0x85ebca6b);return x(a)+'-'+x(b).slice(0,4)+'-4'+x(b).slice(4,7)+'-8'+x(a^b).slice(0,3)+'-'+p+q.slice(0,4)};
+const katIdx=(j,n)=>{const i=(j==='masuk'?KAT_M:KAT_K).indexOf(n);return i<0?99:i};
+const catNames=j=>{const r=Object.values(S.cat).filter(c=>c.jenis===j);return r.length?r.filter(c=>!c.deleted).map(c=>c.nama).sort((a,b)=>katIdx(j,a)-katIdx(j,b)||a.localeCompare(b)):(j==='masuk'?KAT_M:KAT_K)};
+const seedJ=j=>{if(Object.values(S.cat).some(c=>c.jenis===j))return false;(j==='masuk'?KAT_M:KAT_K).forEach(n=>{const id=cid(j,n);S.cat[id]={id,jenis:j,nama:n,deleted:false,_d:1}});save();return true};
+const findCat=(j,n)=>live('cat').find(c=>c.jenis===j&&c.nama===n);
+const usedIn=j=>live('exp').filter(x=>(x.jenis==='masuk')===(j==='masuk'));
+const catUse=(j,n)=>usedIn(j).filter(x=>x.kategori===n).length;
+const catRows=j=>{const base=catNames(j),rows=base.map(n=>({nama:n}));[...new Set(usedIn(j).map(x=>x.kategori).filter(k=>k&&!base.includes(k)))].sort().forEach(n=>rows.push({nama:n,legacy:true}));return rows};
+const katOpts=j=>{const base=catNames(j),used=catRows(j).filter(r=>r.legacy).map(r=>r.nama);
   return [...base.map(k=>[k,k]),...(used.length?[['','— kategori lain yang pernah dipakai —'],...used.map(k=>[k,k])]:[])]};
+const ensureCat=(j,k)=>{if(!catNames(j).includes(k)){seedJ(j);put('cat',{id:cid(j,k),jenis:j,nama:k,deleted:false})}};
 const fExp=(id,jenis)=>{const j=S.exp[id]?.jenis||jenis||'keluar',m=j==='masuk';
   form(id?(m?'Ubah dana masuk':'Ubah pengeluaran'):(m?'Dana operasional masuk':'Pengeluaran operasional'),
    [['tanggal','Tanggal','date'],['kategori',m?'Sumber dana':'Kategori','sel',katOpts(j)],['kategori_baru','Kategori baru (opsional — isi hanya jika tidak ada di daftar)','text'],['keterangan','Keterangan','text'],['jumlah','Jumlah (Rp)','number']],
-   S.exp[id]||{tanggal:today()},f=>{const k=(f.kategori_baru||'').trim()||f.kategori;delete f.kategori_baru;put('exp',{...f,kategori:k,id,jenis:j,jumlah:+f.jumlah})})};
+   S.exp[id]||{tanggal:today()},f=>{const nw=(f.kategori_baru||'').trim(),k=nw||f.kategori;delete f.kategori_baru;if(nw)ensureCat(j,nw);put('exp',{...f,kategori:k,id,jenis:j,jumlah:+f.jumlah})})};
+
+/* ---------- kelola kategori ---------- */
+let KM={jenis:'keluar',mv:null,list:[]};
+function moveExp(j,a,b){Object.values(S.exp).forEach(x=>{if(!x.deleted&&(x.jenis==='masuk')===(j==='masuk')&&x.kategori===a)S.exp[x.id]={...x,kategori:b,_d:1}});save()}
+function katMgr(){KM.mv=null;$('#fm').onsubmit=null;katRender();$('#dg').showModal()}
+function katRender(){
+  const j=KM.jenis;KM.list=catRows(j);
+  const tb=(k,l)=>`<button type="button" class="${j===k?'p':''}" onclick="KM.jenis='${k}';KM.mv=null;katRender()">${l}</button>`;
+  const mv=KM.mv?`<div class="card" style="margin-top:8px"><b>${esc(KM.mv.n)}</b> dipakai ${KM.mv.c} catatan. Pindahkan ke:<select id="kmv">${KM.list.filter(r=>r.nama!==KM.mv.n).map(r=>`<option>${esc(r.nama)}</option>`).join('')}</select>
+    <div class="row" style="border:0"><button type="button" onclick="KM.mv=null;katRender()">Batal</button><button type="button" class="p" onclick="katMove()">Pindahkan &amp; hapus</button></div></div>`:'';
+  $('#fm').innerHTML=`<h3>⚙ Kategori Kas Kantor</h3><div style="display:flex;gap:6px;margin-bottom:8px">${tb('keluar','Pengeluaran')}${tb('masuk','Dana masuk')}</div>
+  <div style="display:flex;gap:6px"><input id="kn" placeholder="Nama kategori baru"><button type="button" class="p" onclick="katAdd()">Tambah</button></div>${mv}
+  <div style="margin-top:8px">${KM.list.map((c,i)=>`<div class="row"><div>${esc(c.nama)}<small>${catUse(j,c.nama)} catatan${c.legacy?' · kategori lama':''}</small></div><div><button type="button" onclick="katRen(${i})">✎</button><button type="button" onclick="katDel(${i})">🗑</button></div></div>`).join('')}</div>
+  <div class="row" style="border:0"><button value="x">Tutup</button></div>`}
+function katAdd(){const n=$('#kn').value.trim(),j=KM.jenis;if(!n)return;
+  if(KM.list.some(c=>!c.legacy&&c.nama.toLowerCase()===n.toLowerCase()))return alert('Kategori itu sudah ada.');
+  seedJ(j);put('cat',{id:cid(j,n),jenis:j,nama:n,deleted:false});katRender()}
+function katRen(i){const c=KM.list[i],j=KM.jenis,v=(prompt('Ganti nama kategori "'+c.nama+'" menjadi:',c.nama)||'').trim();
+  if(!v||v===c.nama)return;
+  const tg=KM.list.find(x=>x!==c&&x.nama.toLowerCase()===v.toLowerCase());
+  if(tg&&!confirm('Kategori "'+tg.nama+'" sudah ada. Gabungkan semua catatan ke sana?'))return;
+  seedJ(j);moveExp(j,c.nama,tg?tg.nama:v);const row=findCat(j,c.nama);
+  if(tg){if(row)put('cat',{id:row.id,deleted:true});if(tg.legacy)put('cat',{id:cid(j,tg.nama),jenis:j,nama:tg.nama,deleted:false})}
+  else if(row)put('cat',{id:row.id,nama:v});else put('cat',{id:cid(j,v),jenis:j,nama:v,deleted:false});
+  render();sync();katRender()}
+function katDel(i){const c=KM.list[i],j=KM.jenis,n=catUse(j,c.nama);
+  if(n>0){KM.mv={n:c.nama,c:n};katRender();return}
+  if(!confirm('Hapus kategori "'+c.nama+'"?'))return;
+  seedJ(j);const row=findCat(j,c.nama);if(row)put('cat',{id:row.id,deleted:true});katRender()}
+function katMove(){const j=KM.jenis,to=$('#kmv').value,from=KM.mv.n;if(!to)return;
+  seedJ(j);moveExp(j,from,to);const row=findCat(j,from);if(row)put('cat',{id:row.id,deleted:true});
+  if(!findCat(j,to))put('cat',{id:cid(j,to),jenis:j,nama:to,deleted:false});
+  KM.mv=null;render();sync();katRender()}
 
 /* ---------- tampilan ---------- */
 function chart(id,cfg){if(!window.Chart)return;charts[id]?.destroy();charts[id]=new Chart($('#'+id),{...cfg,options:{maintainAspectRatio:false,...cfg.options}})}
@@ -144,7 +189,7 @@ function render(){
     m.innerHTML=`<button class="p" onclick="fTx(null,'jual')">+ Penjualan</button> <button class="p" onclick="fTx(null,'beli')">+ Pembelian</button><div class="card" style="margin-top:10px">${tx.sort((a,b)=>b.tanggal.localeCompare(a.tanggal)).map(x=>`<div class="row"><div>${esc(nm(x.barang_id))}<small>${x.tanggal} · ${x.jenis==='jual'?'Jual':'Beli'} ${x.qty} × ${rp(x.harga)}${x.batch?' · batch '+esc(x.batch):''}${x.exp?' · exp '+x.exp:''} ${esc(x.catatan)}</small>${x.jenis==='jual'&&CG.by[x.id]?`<small>HPP ${rp(CG.by[x.id].unit)}/unit · laba ${rp(x.qty*x.harga-CG.by[x.id].total)}${CG.by[x.id].neg?' ⚠ stok tidak cukup':''}</small>`:''}</div><div><b class="${x.jenis==='jual'?'ok':'bad'}">${rp(x.qty*x.harga)}</b> <button onclick="fTx('${x.id}')">✎</button><button onclick="del('tx','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada transaksi bulan ini.</p>'}</div>`;
   }else{
     const all=[...ex].sort((x,y)=>y.tanggal.localeCompare(x.tanggal));
-    m.innerHTML=`<button class="p" onclick="fExp(null,'masuk')">+ Dana masuk</button> <button class="p" onclick="fExp(null,'keluar')">+ Pengeluaran</button>
+    m.innerHTML=`<button class="p" onclick="fExp(null,'masuk')">+ Dana masuk</button> <button class="p" onclick="fExp(null,'keluar')">+ Pengeluaran</button> <button onclick="katMgr()">⚙ Kategori</button>
     <div class="g" style="margin-top:10px">${[['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran',ops],['Sisa dana',sEnd]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${l==='Sisa dana'?(v<0?'bad':'ok'):''}">${rp(v)}</b></div>`).join('')}</div>
     <div class="card">${all.map(x=>`<div class="row"><div>${esc(x.keterangan)}<small>${x.tanggal} · ${esc(x.kategori)}${isIn(x)?' · masuk':''}</small></div><div><b class="${isIn(x)?'ok':'bad'}">${isIn(x)?'+':'−'}${rp(x.jumlah)}</b> <button onclick="fExp('${x.id}')">✎</button><button onclick="del('exp','${x.id}')">🗑</button></div></div>`).join('')||'<p>Belum ada catatan bulan ini.</p>'}</div>`;
   }
