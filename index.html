@@ -36,7 +36,7 @@ input,select,textarea{width:100%;font:inherit;padding:8px;border:1px solid var(-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 /* ====== ISI DUA BARIS INI (Supabase > Project Settings > API) ====== */
-const SUPA_URL='https://cexfxnrekkmvkofngrmr.supabase.co', SUPA_KEY='sb_publishable_7V7ha-5hxUkXK4zj_ijMuw_VL_yL83s';
+const SUPA_URL='ISI_URL_PROJECT', SUPA_KEY='ISI_ANON_PUBLIC_KEY';
 /* =================================================================== */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rp=n=>'Rp'+Math.round(n||0).toLocaleString('id-ID'), today=()=>new Date().toISOString().slice(0,10);
@@ -92,8 +92,8 @@ async function sync(){
 /* ---------- form ---------- */
 function form(title,fields,v,cb){
   $('#fm').innerHTML=`<h3>${title}</h3>`+fields.map(([n,l,ty,o])=>`<label>${l}</label>`+
-   (ty==='sel'?`<select name="${n}">${o.map(([k,t])=>`<option value="${k}" ${k==v[n]?'selected':''}>${esc(t)}</option>`).join('')}</select>`
-   :`<input name="${n}" type="${ty}" ${ty==='number'?'step="any" min="0"':''} value="${esc(v[n]??'')}" ${['catatan','batch','exp'].includes(n)?'':'required'} ${ty==='text'&&o?`list="dl_${n}"`:''}>${ty==='text'&&o?`<datalist id="dl_${n}">${o.map(v=>`<option value="${esc(v)}">`).join('')}</datalist>`:''}`)).join('')+
+   (ty==='sel'?`<select name="${n}">${o.map(([k,t])=>`<option value="${k}" ${k===''?'disabled':''} ${k==v[n]?'selected':''}>${esc(t)}</option>`).join('')}</select>`
+   :`<input name="${n}" type="${ty}" ${ty==='number'?'step="any" min="0"':''} value="${esc(v[n]??'')}" ${['catatan','batch','exp','kategori_baru'].includes(n)?'':'required'} ${ty==='text'&&o?`list="dl_${n}"`:''}>${ty==='text'&&o?`<datalist id="dl_${n}">${o.map(v=>`<option value="${esc(v)}">`).join('')}</datalist>`:''}`)).join('')+
    `<div class="row"><button value="x" formnovalidate>Batal</button><button class="p" value="ok">Simpan</button></div>`;
   const d=$('#dg');d.showModal();
   $('#fm').onsubmit=e=>{if(e.submitter.value!=='ok')return;const f=Object.fromEntries(new FormData($('#fm')));cb(f)};
@@ -104,10 +104,13 @@ const fTx=(id,jenis)=>{const its=live('items');if(!its.length)return alert('Tamb
   form(id?'Ubah transaksi':'Transaksi baru',[['jenis','Jenis','sel',[['jual','Penjualan (stok keluar)'],['beli','Pembelian (stok masuk)']]],
    ['barang_id','Barang','sel',its.map(i=>[i.id,`${i.kode||''} ${i.nama}`])],['qty','Jumlah','number'],['harga','Harga satuan (Rp)','number'],['tanggal','Tanggal','date'],['batch','Nomor batch (opsional)','text',[...new Set(live('tx').map(x=>x.batch).filter(Boolean))]],['exp','Tanggal kedaluwarsa (diisi saat pembelian)','date'],['catatan','Catatan','text']],
    S.tx[id]||{jenis:jenis||'jual',tanggal:today(),harga:0,catatan:''},f=>put('tx',{...f,id,qty:+f.qty,harga:+f.harga,catatan:f.catatan.trim(),batch:f.batch.trim()||null,exp:f.exp||null}))};
+const KAT_K=['Kendaraan','ATK & Perlengkapan','Alat & Bahan','Pelatihan & Perizinan','Pelunasan Vendor','Lainnya'],KAT_M=['Dana operasional','Lainnya'];
+const katOpts=j=>{const base=j==='masuk'?KAT_M:KAT_K,used=[...new Set(live('exp').filter(x=>(x.jenis==='masuk')===(j==='masuk')).map(x=>x.kategori).filter(k=>k&&!base.includes(k)))].sort();
+  return [...base.map(k=>[k,k]),...(used.length?[['','— kategori lain yang pernah dipakai —'],...used.map(k=>[k,k])]:[])]};
 const fExp=(id,jenis)=>{const j=S.exp[id]?.jenis||jenis||'keluar',m=j==='masuk';
   form(id?(m?'Ubah dana masuk':'Ubah pengeluaran'):(m?'Dana operasional masuk':'Pengeluaran operasional'),
-   [['tanggal','Tanggal','date'],['kategori',m?'Sumber dana (mis. Kas pusat, Dana bulanan)':'Kategori (mis. ATK, Listrik, Alat)','text'],['keterangan','Keterangan','text'],['jumlah','Jumlah (Rp)','number']],
-   S.exp[id]||{tanggal:today()},f=>put('exp',{...f,id,jenis:j,jumlah:+f.jumlah}))};
+   [['tanggal','Tanggal','date'],['kategori',m?'Sumber dana':'Kategori','sel',katOpts(j)],['kategori_baru','Kategori baru (opsional — isi hanya jika tidak ada di daftar)','text'],['keterangan','Keterangan','text'],['jumlah','Jumlah (Rp)','number']],
+   S.exp[id]||{tanggal:today()},f=>{const k=(f.kategori_baru||'').trim()||f.kategori;delete f.kategori_baru;put('exp',{...f,kategori:k,id,jenis:j,jumlah:+f.jumlah})})};
 
 /* ---------- tampilan ---------- */
 function chart(id,cfg){if(!window.Chart)return;charts[id]?.destroy();charts[id]=new Chart($('#'+id),{...cfg,options:{maintainAspectRatio:false,...cfg.options}})}
