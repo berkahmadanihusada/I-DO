@@ -36,7 +36,7 @@ input,select,textarea{width:100%;font:inherit;padding:8px;border:1px solid var(-
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 /* ====== ISI DUA BARIS INI (Supabase > Project Settings > API) ====== */
-const SUPA_URL='https://cexfxnrekkmvkofngrmr.supabase.co', SUPA_KEY='sb_publishable_7V7ha-5hxUkXK4zj_ijMuw_VL_yL83s';
+const SUPA_URL='ISI_URL_PROJECT', SUPA_KEY='ISI_ANON_PUBLIC_KEY';
 /* =================================================================== */
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const rp=n=>'Rp'+Math.round(n||0).toLocaleString('id-ID'), today=()=>new Date().toISOString().slice(0,10);
@@ -176,7 +176,7 @@ function render(){
     tx.filter(x=>x.jenis==='jual').forEach(x=>{const p=pi[x.barang_id]=pi[x.barang_id]||{q:0,r:0,c:0};p.q+=x.qty;p.r+=x.qty*x.harga;p.c+=CG.by[x.id]?.total||0});
     const sold={};tx.filter(x=>x.jenis==='jual').forEach(x=>sold[x.barang_id]=(sold[x.barang_id]||0)+x.qty);
     const top=Object.entries(sold).sort((a,b)=>b[1]-a[1]).slice(0,5);
-    m.innerHTML=`<button class="p" onclick="exportXlsx()">⬇ Unduh laporan bulan ini (Excel)</button>${+today().slice(8)>=26&&month===today().slice(0,7)?'<p>📅 Sudah akhir bulan — jangan lupa unduh laporan.</p>':''}<h3 style="margin:12px 0 8px">📦 Dana stok gudang</h3><div class="g">${[['Penjualan (sebelum PPN)',jual],['HPP (harga pokok penjualan)',hpp],['Laba kotor',jual-hpp],['Margin laba kotor',jual?(jual-hpp)/jual*100:0],['PPN keluaran (penjualan)',ppnJ],['Pembelian stok (sebelum PPN)',beli],['PPN masukan (pembelian)',ppnB],['Selisih stok (jual − beli)',jual-beli]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${/^(Selisih|Laba)/.test(l)?(v<0?'bad':'ok'):''}">${l.startsWith('Margin')?v.toFixed(1)+'%':rp(v)}</b></div>`).join('')}</div>
+    m.innerHTML=`<button class="p" onclick="exportXlsx()">⬇ Unduh laporan bulan ini (Excel)</button>${+today().slice(8)>=26&&month===today().slice(0,7)?'<p>📅 Sudah akhir bulan — jangan lupa unduh laporan.</p>':''}<h3 style="margin:12px 0 8px">📦 Dana stok gudang</h3><div class="g">${[['Penjualan (sebelum PPN)',jual],['PPN keluaran (penjualan)',ppnJ],['Total penjualan (termasuk PPN)',jual+ppnJ],['HPP (harga pokok penjualan)',hpp],['Laba kotor',jual-hpp],['Margin laba kotor',jual?(jual-hpp)/jual*100:0],['Pembelian stok (sebelum PPN)',beli],['PPN masukan (pembelian)',ppnB],['Total pembelian (termasuk PPN)',beli+ppnB],['Selisih stok (jual − beli)',jual-beli]].map(([l,v])=>`<div class="card k"><small>${l}</small><b class="${/^(Selisih|Laba)/.test(l)?(v<0?'bad':'ok'):''}">${l.startsWith('Margin')?v.toFixed(1)+'%':rp(v)}</b></div>`).join('')}</div>
     <div class="card"><b>Penjualan vs pembelian per hari</b><div class="cv"><canvas id="c1"></canvas></div></div>
     <div class="card"><b>Barang paling laku bulan ini</b><div class="cv"><canvas id="c2"></canvas></div></div>
     <div class="card"><b>Laba kotor per barang (bulan ini)</b>${Object.entries(pi).map(([id,p])=>`<div class="row"><span>${esc(nm(id))}<small>terjual ${p.q} · penjualan ${rp(p.r)}</small></span><span class="${p.r-p.c<0?'bad':'ok'}">${rp(p.r-p.c)}<small>HPP ${rp(p.c)}</small></span></div>`).join('')||'<p>Belum ada penjualan bulan ini.</p>'}</div>
@@ -233,7 +233,7 @@ function buildWb(){
   const jual=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+x.qty*x.harga,0),beli=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+x.qty*x.harga,0),CG=cogsAll(),hpp=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+(CG.by[x.id]?.total||0),0),ppnJ=tx.filter(x=>x.jenis==='jual').reduce((a,x)=>a+ppnOf(x),0),ppnB=tx.filter(x=>x.jenis==='beli').reduce((a,x)=>a+ppnOf(x),0);
   const ops=ex.filter(x=>!isIn(x)).reduce((a,x)=>a+x.jumlah,0),inc=ex.filter(isIn).reduce((a,x)=>a+x.jumlah,0),sOpen=saldoSampai(c0),sEnd=saldoSampai(c1);
   sheet('Ringkasan','Laporan Bulanan Gudang & Kas Kantor',[['Keterangan',38],['Nilai (Rp)',22,RP]],[
-    ['#DANA STOK GUDANG',''],['Total penjualan (sebelum PPN)',jual],['HPP (harga pokok penjualan)',hpp],['Laba kotor (penjualan − HPP)',jual-hpp],['Margin laba kotor',jual?((jual-hpp)/jual*100).toFixed(1)+' %':'-'],['PPN keluaran (penjualan)',ppnJ],['Total pembelian stok (sebelum PPN)',beli],['PPN masukan (pembelian)',ppnB],['Selisih (jual − beli)',jual-beli],
+    ['#DANA STOK GUDANG',''],['Total penjualan (sebelum PPN)',jual],['PPN keluaran (penjualan)',ppnJ],['Total penjualan (termasuk PPN)',jual+ppnJ],['HPP (harga pokok penjualan)',hpp],['Laba kotor (penjualan − HPP)',jual-hpp],['Margin laba kotor',jual?((jual-hpp)/jual*100).toFixed(1)+' %':'-'],['Total pembelian stok (sebelum PPN)',beli],['PPN masukan (pembelian)',ppnB],['Total pembelian (termasuk PPN)',beli+ppnB],['Selisih (jual − beli)',jual-beli],
     ['#DANA OPERASIONAL KANTOR',''],['Saldo awal bulan',sOpen],['Dana masuk',inc],['Pengeluaran operasional',ops],['Sisa dana (saldo akhir)',sEnd]],{noFilter:1});
   const jx=j=>tx.filter(x=>x.jenis===j).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
   const jur=j=>jx(j).map(x=>[D(x.tanggal),S.items[x.barang_id]?.kode||'',nm(x.barang_id),x.batch||'',x.exp?D(x.exp):'',x.qty,S.items[x.barang_id]?.satuan||'',x.harga,r=>({formula:`F${r}*H${r}`,result:x.qty*x.harga}),x.catatan||'']);
